@@ -1,0 +1,38 @@
+{
+  "name": "visa-monitor-cloud",
+  "version": "1.0.0",
+  "description": "Cloud-based visa monitoring system for Spain and Italy appointments",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "build": "echo 'Build completed'",
+    "postinstall": "echo 'Dependencies installed'"
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "sqlite3": "^5.1.6",
+    "puppeteer": "^22.8.2",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "node-notifier": "^10.0.1",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": [
+    "visa",
+    "monitoring",
+    "automation",
+    "appointment",
+    "spain",
+    "italy"
+  ],
+  "author": "Esha",
+  "license": "MIT"
+}
