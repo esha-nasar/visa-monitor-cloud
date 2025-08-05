@@ -1,360 +1,915 @@
-// Add this JavaScript to your frontend/index.html <script> section
-// Replace the existing API calling functions with these improved versions
-
-// Better error handling for API calls
-async function safeApiCall(url, options = {}) {
-    try {
-        console.log(`🔗 Making API call to: ${url}`);
-        
-        const response = await fetch(url, {
-            ...options,
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                ...options.headers
-            }
-        });
-        
-        console.log(`📊 Response status: ${response.status}`);
-        console.log(`📋 Response headers:`, response.headers.get('content-type'));
-        
-        // Check if response is OK
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`❌ API Error (${response.status}):`, errorText);
-            
-            // Try to parse as JSON first, fall back to text
-            let errorData;
-            try {
-                errorData = JSON.parse(errorText);
-            } catch {
-                errorData = { error: errorText, status: response.status };
-            }
-            
-            throw new Error(`HTTP ${response.status}: ${errorData.error || errorText}`);
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Visa Monitor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
         }
-        
-        // Check if response is JSON
-        const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-            const responseText = await response.text();
-            console.error('❌ Non-JSON response received:', responseText.substring(0, 200) + '...');
-            
-            // If it's HTML, it might be an error page
-            if (responseText.includes('<!DOCTYPE') || responseText.includes('<html>')) {
-                throw new Error('Server returned HTML instead of JSON - check server logs for errors');
-            }
-            
-            throw new Error('Server returned non-JSON response');
+        .status-running { background: #10b981; animation: pulse 1.5s infinite; }
+        .status-stopped { background: #6b7280; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
-        
-        const data = await response.json();
-        console.log('✅ API Response successful:', Object.keys(data));
-        return data;
-        
-    } catch (error) {
-        console.error('❌ API call failed:', error);
-        showError(`API Error: ${error.message}`);
-        throw error;
-    }
-}
-
-// Replace your existing loadApplications function
-async function loadApplications() {
-    try {
-        console.log('📋 Loading applications...');
-        const applications = await safeApiCall('/api/applications');
-        displayApplications(applications);
-        console.log(`✅ Loaded ${applications.length} applications`);
-    } catch (error) {
-        console.error('Failed to load applications:', error);
-        displayApplications([]); // Show empty state
-        showError('Failed to load applications. The server may be starting up.');
-    }
-}
-
-// Replace your existing loadStats function
-async function loadStats() {
-    try {
-        console.log('📊 Loading statistics...');
-        const stats = await safeApiCall('/api/stats');
-        
-        if (stats && stats.totals) {
-            document.getElementById('totalApplications').textContent = stats.totals.total_applications || 0;
-            document.getElementById('slotsFound').textContent = stats.totals.total_slots_found || 0;
-            document.getElementById('completedApplications').textContent = stats.totals.completed_applications || 0;
-            document.getElementById('activeApplications').textContent = stats.totals.active_applications || 0;
-            console.log('✅ Statistics updated');
-        } else {
-            console.warn('⚠️ No stats data received');
+        .error-notification {
+            animation: slideIn 0.3s ease-out;
         }
-    } catch (error) {
-        console.error('Failed to load stats:', error);
-        // Set default values on error
-        document.getElementById('totalApplications').textContent = '0';
-        document.getElementById('slotsFound').textContent = '0';
-        document.getElementById('completedApplications').textContent = '0';
-        document.getElementById('activeApplications').textContent = '0';
-    }
-}
-
-// Replace your existing toggleMonitoring function
-async function toggleMonitoring() {
-    const button = document.getElementById('toggleMonitoringBtn');
-    const buttonText = document.getElementById('toggleText');
-    
-    button.disabled = true;
-    
-    try {
-        console.log(`🔄 Toggling monitoring...`);
-        
-        if (isMonitoring) {
-            console.log('🛑 Stopping monitoring...');
-            const result = await safeApiCall('/api/monitoring/stop', { method: 'POST' });
-            
-            if (result.success) {
-                isMonitoring = false;
-                buttonText.textContent = 'Start Monitoring';
-                button.className = button.className.replace('bg-red-600 hover:bg-red-700', 'bg-green-600 hover:bg-green-700');
-                updateSystemStatus(false);
-                showSuccess(result.message || 'Monitoring stopped');
-                console.log('✅ Monitoring stopped successfully');
-            } else {
-                showError(result.error || 'Failed to stop monitoring');
-            }
-        } else {
-            console.log('🚀 Starting monitoring...');
-            const result = await safeApiCall('/api/monitoring/start', { method: 'POST' });
-            
-            if (result.success) {
-                isMonitoring = true;
-                buttonText.textContent = 'Stop Monitoring';
-                button.className = button.className.replace('bg-green-600 hover:bg-green-700', 'bg-red-600 hover:bg-red-700');
-                updateSystemStatus(true);
-                showSuccess(result.message || 'Monitoring started');
-                console.log('✅ Monitoring started successfully');
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-6 max-w-7xl">
+        <!-- Header -->
+        <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <div class="p-3 bg-gradient-to-br from-red-500 to-blue-600 rounded-lg">
+                        <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 class="text-3xl font-bold text-gray-900">🇪🇸🇮🇹 Universal Visa Monitor</h1>
+                        <p class="text-gray-600">Cloud + Local visa appointment monitoring system</p>
+                    </div>
+                </div>
                 
-                // Show additional info if available
-                if (result.platform) {
-                    console.log(`🌐 Platform: ${result.platform}`);
+                <div class="flex items-center space-x-3">
+                    <div id="systemStatus" class="flex items-center px-4 py-2 rounded-full text-sm font-medium bg-gray-100 text-gray-600">
+                        <span class="status-indicator status-stopped"></span>
+                        SYSTEM STOPPED
+                    </div>
+                    
+                    <button id="toggleMonitoringBtn" onclick="toggleMonitoring()" class="flex items-center space-x-2 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors font-medium">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h1m4 0h1m-6 4h1m4 0h1m6-6V9a3 3 0 00-3-3H6a3 3 0 00-3 3v10a3 3 0 003 3h12a3 3 0 003-3v-1z"></path>
+                        </svg>
+                        <span id="toggleText">Start Monitoring</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Stats Row -->
+            <div class="grid grid-cols-4 gap-4 mt-6">
+                <div class="bg-blue-50 rounded-lg p-4">
+                    <div class="flex items-center space-x-2">
+                        <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v6a2 2 0 002 2h2m0 0h6m-6 0v-2m6 2v2m0-2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2"></path>
+                        </svg>
+                        <span class="text-sm text-blue-800 font-medium">Total Applications</span>
+                    </div>
+                    <p id="totalApplications" class="text-2xl font-bold text-blue-900">0</p>
+                </div>
+                
+                <div class="bg-green-50 rounded-lg p-4">
+                    <div class="flex items-center space-x-2">
+                        <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                        <span class="text-sm text-green-800 font-medium">Slots Found</span>
+                    </div>
+                    <p id="slotsFound" class="text-2xl font-bold text-green-900">0</p>
+                </div>
+                
+                <div class="bg-purple-50 rounded-lg p-4">
+                    <div class="flex items-center space-x-2">
+                        <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <span class="text-sm text-purple-800 font-medium">Completed</span>
+                    </div>
+                    <p id="completedApplications" class="text-2xl font-bold text-purple-900">0</p>
+                </div>
+                
+                <div class="bg-orange-50 rounded-lg p-4">
+                    <div class="flex items-center space-x-2">
+                        <svg class="w-5 h-5 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <span class="text-sm text-orange-800 font-medium">Active</span>
+                    </div>
+                    <p id="activeApplications" class="text-2xl font-bold text-orange-900">0</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div class="bg-white rounded-xl shadow-lg mb-6">
+            <div class="border-b border-gray-200">
+                <nav class="flex space-x-8 px-6">
+                    <button class="tab-button py-4 px-1 border-b-2 border-blue-500 text-blue-600 font-medium" 
+                            onclick="showTab('applications')" data-tab="applications">
+                        My Applications
+                    </button>
+                    <button class="tab-button py-4 px-1 border-b-2 border-transparent hover:text-blue-600 hover:border-blue-300" 
+                            onclick="showTab('newApplication')" data-tab="newApplication">
+                        Add New Application
+                    </button>
+                    <button class="tab-button py-4 px-1 border-b-2 border-transparent hover:text-blue-600 hover:border-blue-300" 
+                            onclick="showTab('monitoring')" data-tab="monitoring">
+                        Monitoring Status
+                    </button>
+                    <button class="tab-button py-4 px-1 border-b-2 border-transparent hover:text-blue-600 hover:border-blue-300" 
+                            onclick="showTab('logs')" data-tab="logs">
+                        Activity Logs
+                    </button>
+                </nav>
+            </div>
+
+            <!-- Applications Tab -->
+            <div id="applicationsTab" class="tab-content active p-6">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-xl font-semibold text-gray-900">My Visa Applications</h2>
+                    <button onclick="loadApplications()" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
+                        Refresh
+                    </button>
+                </div>
+                
+                <div id="applicationsList" class="space-y-4">
+                    <!-- Applications will be loaded here -->
+                </div>
+            </div>
+
+            <!-- New Application Tab -->
+            <div id="newApplicationTab" class="tab-content p-6">
+                <h2 class="text-xl font-semibold text-gray-900 mb-6">Add New Visa Application</h2>
+                
+                <form id="applicationForm" class="space-y-6">
+                    <!-- Country and Visa Type -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Country *</label>
+                            <select id="country" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                                <option value="">Select Country</option>
+                                <option value="spain">🇪🇸 Spain</option>
+                                <option value="italy">🇮🇹 Italy</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Visa Type *</label>
+                            <select id="visaType" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                                <option value="">Select Visa Type</option>
+                                <option value="tourist">Tourist</option>
+                                <option value="business">Business</option>
+                                <option value="study">Study</option>
+                                <option value="work">Work</option>
+                                <option value="family">Family Reunion</option>
+                                <option value="medical">Medical</option>
+                                <option value="conference">Conference</option>
+                                <option value="transit">Transit</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Personal Information -->
+                    <div class="border-t pt-6">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">Personal Information</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">First Name *</label>
+                                <input type="text" id="firstName" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Last Name *</label>
+                                <input type="text" id="lastName" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Email *</label>
+                                <input type="email" id="email" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Phone *</label>
+                                <input type="tel" id="phone" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Passport Number *</label>
+                                <input type="text" id="passportNumber" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Date of Birth *</label>
+                                <input type="date" id="dateOfBirth" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Nationality *</label>
+                                <select id="nationality" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                                    <option value="Pakistani">Pakistani</option>
+                                    <option value="Indian">Indian</option>
+                                    <option value="Bangladeshi">Bangladeshi</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Address</label>
+                                <input type="text" id="address" class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Visa Site Credentials -->
+                    <div class="border-t pt-6">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">Visa Website Login Credentials</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Site Email *</label>
+                                <input type="email" id="siteEmail" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                                <p class="text-xs text-gray-500 mt-1">Your login email for the visa website</p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Site Password *</label>
+                                <input type="password" id="sitePassword" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                                <p class="text-xs text-gray-500 mt-1">Your login password for the visa website</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Application Settings -->
+                    <div class="border-t pt-6">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">Application Settings</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Preferred Center</label>
+                                <select id="preferredCenter" class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                                    <option value="main">Main Center</option>
+                                    <option value="islamabad">Islamabad</option>
+                                    <option value="lahore">Lahore</option>
+                                    <option value="karachi">Karachi</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Priority (1-10)</label>
+                                <input type="number" id="priority" min="1" max="10" value="5" class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                            </div>
+                            <div class="flex items-center space-x-2 pt-7">
+                                <input type="checkbox" id="autoBook" checked class="rounded border-gray-300">
+                                <label for="autoBook" class="text-sm text-gray-700">Auto-book when slots found</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex justify-end">
+                        <button type="submit" class="bg-blue-600 text-white px-6 py-3 rounded-md hover:bg-blue-700">
+                            Create Application
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Monitoring Tab -->
+            <div id="monitoringTab" class="tab-content p-6">
+                <h2 class="text-xl font-semibold text-gray-900 mb-6">System Monitoring Status</h2>
+                
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Current Status -->
+                    <div class="bg-gray-50 rounded-lg p-6">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">Current Status</h3>
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-600">System Status:</span>
+                                <span id="monitoringSystemStatus" class="font-medium text-gray-800">Stopped</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-600">Active Countries:</span>
+                                <span id="activeCountries" class="font-medium text-gray-800">None</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-600">Start Time:</span>
+                                <span id="startTime" class="font-medium text-gray-800">-</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-600">Last Activity:</span>
+                                <span id="lastActivity" class="font-medium text-gray-800">-</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Statistics -->
+                    <div class="bg-gray-50 rounded-lg p-6">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">Statistics</h3>
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-600">Spain Checks:</span>
+                                <span id="spainChecks" class="font-medium text-gray-800">0</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-600">Italy Checks:</span>
+                                <span id="italyChecks" class="font-medium text-gray-800">0</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-600">Total Slots Found:</span>
+                                <span id="totalSlotsFoundStats" class="font-medium text-green-600">0</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-600">Total Bookings:</span>
+                                <span id="totalBookings" class="font-medium text-blue-600">0</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Logs Tab -->
+            <div id="logsTab" class="tab-content p-6">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-xl font-semibold text-gray-900">Activity Logs</h2>
+                    <button onclick="loadLogs()" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
+                        Refresh
+                    </button>
+                </div>
+                
+                <div id="activityLogs" class="bg-gray-50 rounded-lg p-4 max-h-96 overflow-y-auto">
+                    <!-- Logs will be loaded here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isMonitoring = false;
+        let refreshInterval = null;
+
+        // Improved API call function with proper error handling
+        async function safeApiCall(url, options = {}) {
+            try {
+                console.log(`🔗 Making API call to: ${url}`);
+                
+                const response = await fetch(url, {
+                    ...options,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        ...options.headers
+                    }
+                });
+                
+                console.log(`📊 Response status: ${response.status}`);
+                console.log(`📋 Response headers:`, response.headers.get('content-type'));
+                
+                // Check if response is OK
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error(`❌ API Error (${response.status}):`, errorText);
+                    
+                    // Try to parse as JSON first, fall back to text
+                    let errorData;
+                    try {
+                        errorData = JSON.parse(errorText);
+                    } catch {
+                        errorData = { error: errorText, status: response.status };
+                    }
+                    
+                    throw new Error(`HTTP ${response.status}: ${errorData.error || errorText}`);
                 }
-                if (result.mode) {
-                    console.log(`🤖 Mode: ${result.mode}`);
+                
+                // Check if response is JSON
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    const responseText = await response.text();
+                    console.error('❌ Non-JSON response received:', responseText.substring(0, 200) + '...');
+                    
+                    // If it's HTML, it might be an error page
+                    if (responseText.includes('<!DOCTYPE') || responseText.includes('<html>')) {
+                        throw new Error('Server returned HTML instead of JSON - check server logs for errors');
+                    }
+                    
+                    throw new Error('Server returned non-JSON response');
                 }
-            } else {
-                showError(result.error || 'Failed to start monitoring');
-                console.error('❌ Monitoring start failed:', result);
+                
+                const data = await response.json();
+                console.log('✅ API Response successful:', Object.keys(data));
+                return data;
+                
+            } catch (error) {
+                console.error('❌ API call failed:', error);
+                showError(`API Error: ${error.message}`);
+                throw error;
             }
         }
-    } catch (error) {
-        console.error('❌ Toggle monitoring failed:', error);
-        showError(`Operation failed: ${error.message}`);
-    } finally {
-        button.disabled = false;
-    }
-}
 
-// Replace your existing form submission handler
-function setupFormSubmission() {
-    document.getElementById('applicationForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        
-        console.log('📝 Submitting application form...');
-
-        const formData = {
-            country: document.getElementById('country').value,
-            visa_type: document.getElementById('visaType').value,
-            first_name: document.getElementById('firstName').value,
-            last_name: document.getElementById('lastName').value,
-            email: document.getElementById('email').value,
-            phone: document.getElementById('phone').value,
-            passport_number: document.getElementById('passportNumber').value,
-            date_of_birth: document.getElementById('dateOfBirth').value,
-            nationality: document.getElementById('nationality').value,
-            address: document.getElementById('address').value,
-            preferred_center: document.getElementById('preferredCenter').value,
-            site_email: document.getElementById('siteEmail').value,
-            site_password: document.getElementById('sitePassword').value,
-            priority: parseInt(document.getElementById('priority').value),
-            auto_book: document.getElementById('autoBook').checked
-        };
-
-        try {
-            console.log('🚀 Creating application...', formData.first_name, formData.last_name);
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', async function() {
+            console.log('🚀 Page loaded - testing API connectivity...');
             
-            const result = await safeApiCall('/api/applications', {
-                method: 'POST',
-                body: JSON.stringify(formData)
-            });
-            
-            if (result.success) {
-                showSuccess(result.message || 'Application created successfully!');
-                document.getElementById('applicationForm').reset();
+            try {
+                // Test basic API connectivity
+                const health = await safeApiCall('/health');
+                console.log('✅ API connectivity test passed:', health);
+                
+                // Load initial data
                 showTab('applications');
                 loadApplications();
                 loadStats();
-                console.log('✅ Application created successfully');
-            } else {
-                showError(result.error || 'Failed to create application');
+                setupFormSubmission();
+                startAutoRefresh();
+                
+            } catch (error) {
+                console.error('❌ API connectivity test failed:', error);
+                showError('Cannot connect to server. Please check your internet connection and refresh the page.');
             }
-        } catch (error) {
-            console.error('❌ Form submission failed:', error);
-            showError(`Failed to create application: ${error.message}`);
-        }
-    });
-}
-
-// Replace your deleteApplication function
-async function deleteApplication(id) {
-    if (!confirm('Are you sure you want to delete this application?')) {
-        return;
-    }
-
-    try {
-        console.log(`🗑️ Deleting application ${id}...`);
-        
-        const result = await safeApiCall(`/api/applications/${id}`, {
-            method: 'DELETE'
         });
-        
-        if (result.success) {
-            showSuccess(result.message || 'Application deleted successfully');
-            loadApplications();
-            loadStats();
-            console.log('✅ Application deleted successfully');
-        } else {
-            showError(result.error || 'Failed to delete application');
-        }
-    } catch (error) {
-        console.error('❌ Delete failed:', error);
-        showError(`Failed to delete application: ${error.message}`);
-    }
-}
 
-// Replace your loadMonitoringStatus function
-async function loadMonitoringStatus() {
-    try {
-        console.log('📊 Loading monitoring status...');
-        const status = await safeApiCall('/api/monitoring/status');
-        
-        isMonitoring = status.isRunning || false;
-        
-        document.getElementById('monitoringSystemStatus').textContent = status.isRunning ? 'Running' : 'Stopped';
-        document.getElementById('activeCountries').textContent = status.activeCountries && status.activeCountries.length > 0 ? status.activeCountries.join(', ') : 'None';
-        document.getElementById('startTime').textContent = status.startTime ? new Date(status.startTime).toLocaleString() : '-';
-        document.getElementById('lastActivity').textContent = status.lastActivity ? new Date(status.lastActivity).toLocaleString() : '-';
-        
-        if (status.stats && status.stats.total) {
-            document.getElementById('totalSlotsFoundStats').textContent = status.stats.total.slotsFound || 0;
-            document.getElementById('totalBookings').textContent = status.stats.total.bookings || 0;
-        }
-        
-        // Update platform info if available
-        if (status.platform) {
-            console.log(`🌐 Platform: ${status.platform}`);
-        }
-        if (status.browserAutomation) {
-            console.log(`🤖 Browser: ${status.browserAutomation}`);
-        }
-        
-        // Update button state
-        const button = document.getElementById('toggleMonitoringBtn');
-        const buttonText = document.getElementById('toggleText');
-        
-        if (status.isRunning) {
-            buttonText.textContent = 'Stop Monitoring';
-            button.className = button.className.replace('bg-green-600 hover:bg-green-700', 'bg-red-600 hover:bg-red-700');
-            updateSystemStatus(true);
-        } else {
-            buttonText.textContent = 'Start Monitoring';
-            button.className = button.className.replace('bg-red-600 hover:bg-red-700', 'bg-green-600 hover:bg-green-700');
-            updateSystemStatus(false);
-        }
-        
-        console.log('✅ Monitoring status updated');
-        
-    } catch (error) {
-        console.error('Failed to load monitoring status:', error);
-        // Set safe defaults
-        isMonitoring = false;
-        updateSystemStatus(false);
-    }
-}
+        // Tab management
+        function showTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Remove active class from all tab buttons
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.classList.remove('border-blue-500', 'text-blue-600');
+                button.classList.add('border-transparent');
+            });
+            
+            // Show selected tab
+            document.getElementById(tabName + 'Tab').classList.add('active');
+            
+            // Activate selected tab button
+            const activeButton = document.querySelector(`[data-tab="${tabName}"]`);
+            if (activeButton) {
+                activeButton.classList.add('border-blue-500', 'text-blue-600');
+                activeButton.classList.remove('border-transparent');
+            }
 
-// Replace your loadLogs function
-async function loadLogs() {
-    try {
-        console.log('📋 Loading activity logs...');
-        const logs = await safeApiCall('/api/logs?limit=100');
-        displayLogs(logs);
-        console.log(`✅ Loaded ${logs.length} log entries`);
-    } catch (error) {
-        console.error('Failed to load logs:', error);
-        displayLogs([]); // Show empty state
-        showError('Failed to load activity logs');
-    }
-}
-
-// Improved error display function
-function showError(message) {
-    console.error('🚨 Error:', message);
-    
-    // Remove existing error notifications
-    const existingErrors = document.querySelectorAll('.error-notification');
-    existingErrors.forEach(el => el.remove());
-    
-    // Create error notification
-    const notification = document.createElement('div');
-    notification.className = 'error-notification fixed top-4 right-4 p-4 rounded-lg shadow-lg z-50 bg-red-100 text-red-800 border border-red-200 max-w-md';
-    notification.innerHTML = `
-        <div class="flex items-start">
-            <div class="flex-shrink-0">
-                <svg class="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
-                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
-                </svg>
-            </div>
-            <div class="ml-3 flex-1">
-                <h3 class="text-sm font-medium">Error</h3>
-                <p class="text-sm mt-1">${message}</p>
-            </div>
-            <div class="ml-4 flex-shrink-0">
-                <button onclick="this.parentElement.parentElement.parentElement.remove()" class="inline-flex text-red-400 hover:text-red-600">
-                    <span class="sr-only">Close</span>
-                    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"></path>
-                    </svg>
-                </button>
-            </div>
-        </div>
-    `;
-    
-    document.body.appendChild(notification);
-    
-    // Auto-remove after 10 seconds
-    setTimeout(() => {
-        if (notification.parentNode) {
-            notification.remove();
+            // Load data based on tab
+            if (tabName === 'monitoring') {
+                loadMonitoringStatus();
+            } else if (tabName === 'logs') {
+                loadLogs();
+            }
         }
-    }, 10000);
-}
 
-// Test API connectivity on page load
-document.addEventListener('DOMContentLoaded', async function() {
-    console.log('🚀 Page loaded - testing API connectivity...');
-    
-    try {
-        // Test basic API connectivity
-        const health = await safeApiCall('/health');
-        console.log('✅ API connectivity test passed:', health);
-        
-        // Load initial data
-        loadApplications();
-        loadStats();
-        setupFormSubmission();
-        startAutoRefresh();
-        
-    } catch (error) {
-        console.error('❌ API connectivity test failed:', error);
-        showError('Cannot connect to server. Please check your internet connection and refresh the page.');
-    }
-});
+        // Application management
+        async function loadApplications() {
+            try {
+                console.log('📋 Loading applications...');
+                const applications = await safeApiCall('/api/applications');
+                displayApplications(applications);
+                console.log(`✅ Loaded ${applications.length} applications`);
+            } catch (error) {
+                console.error('Failed to load applications:', error);
+                displayApplications([]); // Show empty state
+            }
+        }
+
+        function displayApplications(applications) {
+            const container = document.getElementById('applicationsList');
+            
+            if (applications.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-12">
+                        <svg class="w-16 h-16 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        </svg>
+                        <h3 class="text-lg font-medium text-gray-900 mb-2">No applications found</h3>
+                        <p class="text-gray-500 mb-4">Create your first visa application to get started</p>
+                        <button onclick="showTab('newApplication')" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
+                            Add New Application
+                        </button>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = applications.map(app => `
+                <div class="border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center space-x-3">
+                            <span class="text-3xl">${app.country === 'spain' ? '🇪🇸' : '🇮🇹'}</span>
+                            <div>
+                                <h3 class="text-lg font-medium text-gray-900">${app.first_name} ${app.last_name}</h3>
+                                <p class="text-sm text-gray-600">${app.country.toUpperCase()} - ${app.visa_type.toUpperCase()}</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <span class="px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(app.status)}">
+                                ${app.status.toUpperCase()}
+                            </span>
+                            <div class="flex space-x-2">
+                                <button onclick="editApplication(${app.id})" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
+                                    Edit
+                                </button>
+                                <button onclick="deleteApplication(${app.id})" class="text-red-600 hover:text-red-800 text-sm font-medium">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-4 gap-4 text-sm">
+                        <div>
+                            <span class="text-gray-500">Attempts:</span>
+                            <span class="font-medium ml-1">${app.attempts || 0}</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-500">Slots Found:</span>
+                            <span class="font-medium ml-1 text-green-600">${app.slots_found || 0}</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-500">Priority:</span>
+                            <span class="font-medium ml-1">${app.priority || 1}</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-500">Auto-book:</span>
+                            <span class="font-medium ml-1">${app.auto_book ? 'Yes' : 'No'}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-4 text-xs text-gray-500">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>Created: ${new Date(app.created_at).toLocaleDateString()}</div>
+                            <div>Last Check: ${app.last_check ? new Date(app.last_check).toLocaleString() : 'Never'}</div>
+                        </div>
+                    </div>
+                    
+                    ${app.booking_result ? `
+                        <div class="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+                            <p class="text-sm text-green-800 font-medium">Booking Result: ${app.booking_result}</p>
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+        }
+
+        function getStatusColor(status) {
+            switch (status) {
+                case 'active': return 'bg-green-100 text-green-800';
+                case 'completed': return 'bg-blue-100 text-blue-800';
+                case 'paused': return 'bg-yellow-100 text-yellow-800';
+                case 'failed': return 'bg-red-100 text-red-800';
+                default: return 'bg-gray-100 text-gray-800';
+            }
+        }
+
+        // Form submission
+        function setupFormSubmission() {
+            document.getElementById('applicationForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                console.log('📝 Submitting application form...');
+
+                const formData = {
+                    country: document.getElementById('country').value,
+                    visa_type: document.getElementById('visaType').value,
+                    first_name: document.getElementById('firstName').value,
+                    last_name: document.getElementById('lastName').value,
+                    email: document.getElementById('email').value,
+                    phone: document.getElementById('phone').value,
+                    passport_number: document.getElementById('passportNumber').value,
+                    date_of_birth: document.getElementById('dateOfBirth').value,
+                    nationality: document.getElementById('nationality').value,
+                    address: document.getElementById('address').value,
+                    preferred_center: document.getElementById('preferredCenter').value,
+                    site_email: document.getElementById('siteEmail').value,
+                    site_password: document.getElementById('sitePassword').value,
+                    priority: parseInt(document.getElementById('priority').value),
+                    auto_book: document.getElementById('autoBook').checked
+                };
+
+                try {
+                    console.log('🚀 Creating application...', formData.first_name, formData.last_name);
+                    
+                    const result = await safeApiCall('/api/applications', {
+                        method: 'POST',
+                        body: JSON.stringify(formData)
+                    });
+                    
+                    if (result.success) {
+                        showSuccess(result.message || 'Application created successfully!');
+                        document.getElementById('applicationForm').reset();
+                        showTab('applications');
+                        loadApplications();
+                        loadStats();
+                        console.log('✅ Application created successfully');
+                    } else {
+                        showError(result.error || 'Failed to create application');
+                    }
+                } catch (error) {
+                    console.error('❌ Form submission failed:', error);
+                    showError(`Failed to create application: ${error.message}`);
+                }
+            });
+        }
+
+        // Delete application
+        async function deleteApplication(id) {
+            if (!confirm('Are you sure you want to delete this application?')) {
+                return;
+            }
+
+            try {
+                console.log(`🗑️ Deleting application ${id}...`);
+                
+                const result = await safeApiCall(`/api/applications/${id}`, {
+                    method: 'DELETE'
+                });
+                
+                if (result.success) {
+                    showSuccess(result.message || 'Application deleted successfully');
+                    loadApplications();
+                    loadStats();
+                    console.log('✅ Application deleted successfully');
+                } else {
+                    showError(result.error || 'Failed to delete application');
+                }
+            } catch (error) {
+                console.error('❌ Delete failed:', error);
+                showError(`Failed to delete application: ${error.message}`);
+            }
+        }
+
+        // Monitoring control
+        async function toggleMonitoring() {
+            const button = document.getElementById('toggleMonitoringBtn');
+            const buttonText = document.getElementById('toggleText');
+            
+            button.disabled = true;
+            
+            try {
+                console.log(`🔄 Toggling monitoring...`);
+                
+                if (isMonitoring) {
+                    console.log('🛑 Stopping monitoring...');
+                    const result = await safeApiCall('/api/monitoring/stop', { method: 'POST' });
+                    
+                    if (result.success) {
+                        isMonitoring = false;
+                        buttonText.textContent = 'Start Monitoring';
+                        button.className = button.className.replace('bg-red-600 hover:bg-red-700', 'bg-green-600 hover:bg-green-700');
+                        updateSystemStatus(false);
+                        showSuccess(result.message || 'Monitoring stopped');
+                        console.log('✅ Monitoring stopped successfully');
+                    } else {
+                        showError(result.error || 'Failed to stop monitoring');
+                    }
+                } else {
+                    console.log('🚀 Starting monitoring...');
+                    const result = await safeApiCall('/api/monitoring/start', { method: 'POST' });
+                    
+                    if (result.success) {
+                        isMonitoring = true;
+                        buttonText.textContent = 'Stop Monitoring';
+                        button.className = button.className.replace('bg-green-600 hover:bg-green-700', 'bg-red-600 hover:bg-red-700');
+                        updateSystemStatus(true);
+                        showSuccess(result.message || 'Monitoring started');
+                        console.log('✅ Monitoring started successfully');
+                        
+                        // Show additional info if available
+                        if (result.platform) {
+                            console.log(`🌐 Platform: ${result.platform}`);
+                        }
+                        if (result.mode) {
+                            console.log(`🤖 Mode: ${result.mode}`);
+                        }
+                    } else {
+                        showError(result.error || 'Failed to start monitoring');
+                        console.error('❌ Monitoring start failed:', result);
+                    }
+                }
+            } catch (error) {
+                console.error('❌ Toggle monitoring failed:', error);
+                showError(`Operation failed: ${error.message}`);
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        function updateSystemStatus(running) {
+            const statusElement = document.getElementById('systemStatus');
+            const statusIndicator = statusElement.querySelector('.status-indicator');
+            
+            if (running) {
+                statusElement.innerHTML = '<span class="status-indicator status-running"></span>SYSTEM RUNNING';
+                statusElement.className = 'flex items-center px-4 py-2 rounded-full text-sm font-medium bg-green-100 text-green-800';
+            } else {
+                statusElement.innerHTML = '<span class="status-indicator status-stopped"></span>SYSTEM STOPPED';
+                statusElement.className = 'flex items-center px-4 py-2 rounded-full text-sm font-medium bg-gray-100 text-gray-600';
+            }
+        }
+
+        // Load system statistics
+        async function loadStats() {
+            try {
+                console.log('📊 Loading statistics...');
+                const stats = await safeApiCall('/api/stats');
+                
+                if (stats && stats.totals) {
+                    document.getElementById('totalApplications').textContent = stats.totals.total_applications || 0;
+                    document.getElementById('slotsFound').textContent = stats.totals.total_slots_found || 0;
+                    document.getElementById('completedApplications').textContent = stats.totals.completed_applications || 0;
+                    document.getElementById('activeApplications').textContent = stats.totals.active_applications || 0;
+                    console.log('✅ Statistics updated');
+                } else {
+                    console.warn('⚠️ No stats data received');
+                }
+            } catch (error) {
+                console.error('Failed to load stats:', error);
+                // Set default values on error
+                document.getElementById('totalApplications').textContent = '0';
+                document.getElementById('slotsFound').textContent = '0';
+                document.getElementById('completedApplications').textContent = '0';
+                document.getElementById('activeApplications').textContent = '0';
+            }
+        }
+
+        // Load monitoring status
+        async function loadMonitoringStatus() {
+            try {
+                console.log('📊 Loading monitoring status...');
+                const status = await safeApiCall('/api/monitoring/status');
+                
+                isMonitoring = status.isRunning || false;
+                
+                document.getElementById('monitoringSystemStatus').textContent = status.isRunning ? 'Running' : 'Stopped';
+                document.getElementById('activeCountries').textContent = status.activeCountries && status.activeCountries.length > 0 ? status.activeCountries.join(', ') : 'None';
+                document.getElementById('startTime').textContent = status.startTime ? new Date(status.startTime).toLocaleString() : '-';
+                document.getElementById('lastActivity').textContent = status.lastActivity ? new Date(status.lastActivity).toLocaleString() : '-';
+                
+                if (status.stats) {
+                    document.getElementById('spainChecks').textContent = status.stats.spain ? status.stats.spain.checks || 0 : 0;
+                    document.getElementById('italyChecks').textContent = status.stats.italy ? status.stats.italy.checks || 0 : 0;
+                    document.getElementById('totalSlotsFoundStats').textContent = status.stats.total ? status.stats.total.slotsFound || 0 : 0;
+                    document.getElementById('totalBookings').textContent = status.stats.total ? status.stats.total.bookings || 0 : 0;
+                }
+                
+                // Update platform info if available
+                if (status.platform) {
+                    console.log(`🌐 Platform: ${status.platform}`);
+                }
+                if (status.browserAutomation) {
+                    console.log(`🤖 Browser: ${status.browserAutomation}`);
+                }
+                
+                // Update button state
+                const button = document.getElementById('toggleMonitoringBtn');
+                const buttonText = document.getElementById('toggleText');
+                
+                if (status.isRunning) {
+                    buttonText.textContent = 'Stop Monitoring';
+                    button.className = button.className.replace('bg-green-600 hover:bg-green-700', 'bg-red-600 hover:bg-red-700');
+                    updateSystemStatus(true);
+                } else {
+                    buttonText.textContent = 'Start Monitoring';
+                    button.className = button.className.replace('bg-red-600 hover:bg-red-700', 'bg-green-600 hover:bg-green-700');
+                    updateSystemStatus(false);
+                }
+                
+                console.log('✅ Monitoring status updated');
+                
+            } catch (error) {
+                console.error('Failed to load monitoring status:', error);
+                // Set safe defaults
+                isMonitoring = false;
+                updateSystemStatus(false);
+            }
+        }
+
+        // Load activity logs
+        async function loadLogs() {
+            try {
+                console.log('📋 Loading activity logs...');
+                const logs = await safeApiCall('/api/logs?limit=100');
+                displayLogs(logs);
+                console.log(`✅ Loaded ${logs.length} log entries`);
+            } catch (error) {
+                console.error('Failed to load logs:', error);
+                displayLogs([]); // Show empty state
+            }
+        }
+
+        function displayLogs(logs) {
+            const container = document.getElementById('activityLogs');
+            
+            if (logs.length === 0) {
+                container.innerHTML = '<p class="text-gray-500 text-center py-4">No activity logs found</p>';
+                return;
+            }
+
+            container.innerHTML = logs.map(log => `
+                <div class="border-l-4 ${getLogColor(log.action)} pl-4 py-2 mb-3">
+                    <div class="flex items-center justify-between">
+                        <h4 class="font-medium text-gray-900">${log.action.replace(/_/g, ' ')}</h4>
+                        <span class="text-xs text-gray-500">${new Date(log.timestamp).toLocaleString()}</span>
+                    </div>
+                    <p class="text-sm text-gray-600 mt-1">${log.details || 'No details'}</p>
+                    ${log.first_name && log.last_name ? `
+                        <p class="text-xs text-gray-500 mt-1">
+                            Application: ${log.first_name} ${log.last_name} (${log.visa_type || 'Unknown'})
+                        </p>
+                    ` : ''}
+                    <span class="inline-block px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-600 mt-2">
+                        ${log.country.toUpperCase()}
+                    </span>
+                </div>
+            `).join('');
+        }
+
+        function getLogColor(action) {
+            if (action.includes('SUCCESS') || action.includes('FOUND')) return 'border-green-400';
+            if (action.includes('ERROR') || action.includes('FAILED')) return 'border-red-400';
+            if (action.includes('STARTED')) return 'border-blue-400';
+            if (action.includes('CREATED')) return 'border-purple-400';
+            return 'border-gray-400';
+        }
+
+        // Auto-refresh functionality
+        function startAutoRefresh() {
+            refreshInterval = setInterval(() => {
+                loadStats();
+                if (document.querySelector('#monitoringTab.active')) {
+                    loadMonitoringStatus();
+                }
+                if (document.querySelector('#logsTab.active')) {
+                    loadLogs();
+                }
+            }, 10000); // Refresh every 10 seconds
+        }
+
+        // Utility functions
+        function showSuccess(message) {
+            showNotification(message, 'success');
+        }
+
+        function showError(message) {
+            console.error('🚨 Error:', message);
+            
+            // Remove existing error notifications
+            const existingErrors = document.querySelectorAll('.error-notification');
+            existingErrors.forEach(el => el.remove());
+            
+            // Create error notification
+            const notification = document.createElement('div');
+            notification.className = 'error-notification fixed top-4 right-4 p-4 rounded-lg shadow-lg z-50 bg-red-100 text-red-800 border border-red-200 max-w-md';
+            notification.innerHTML = `
+                <div class="flex items-start">
+                    <div class="flex-shrink-0">
+                        <svg class="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
+                        </svg>
+                    </div>
+                    <div class="ml-3 flex-1">
+                        <h3 class="text-sm font-medium">Error</h3>
+                        <p class="text-sm mt-1">${message}</p>
+                    </div>
+                    <div class="ml-4 flex-shrink-0">
+                        <button onclick="this.parentElement.parentElement.parentElement.remove()" class="inline-flex text-red-400 hover:text-red-600">
+                            <span class="sr-only">Close</span>
+                            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(notification);
+            
+            // Auto-remove after 10 seconds
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, 10000);
+        }
+
+        function showNotification(message, type) {
+            const notification = document.createElement('div');
+            notification.className = `fixed top-4 right-4 p-4 rounded-lg shadow-lg z-50 ${
+                type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' : 
+                'bg-red-100 text-red-800 border border-red-200'
+            }`;
+            notification.textContent = message;
+            
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.remove();
+            }, 5000);
+        }
+
+        // Edit application (placeholder)
+        function editApplication(id) {
+            showNotification('Edit functionality coming soon!', 'info');
+        }
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+        });
+    </script>
+</body>
+</html>
