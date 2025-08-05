@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "build": "echo 'Railway build complete'",
+    "build": "echo 'No build step needed for Railway'",
     "dev": "nodemon server.js"
   },
   "engines": {
