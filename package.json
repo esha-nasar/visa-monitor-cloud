@@ -1,11 +1,12 @@
 {
   "name": "visa-monitor-cloud",
   "version": "1.0.0",
-  "description": "Cloud-based visa monitoring system for Spain and Italy appointments",
+  "description": "Universal visa monitoring system",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "build": "echo 'No build step needed for Railway'",
+    "build": "npx puppeteer browsers install chrome",
+    "postinstall": "npx puppeteer browsers install chrome",
     "dev": "nodemon server.js"
   },
   "engines": {
